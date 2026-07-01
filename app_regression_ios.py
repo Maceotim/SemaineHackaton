@@ -32,6 +32,11 @@ GREEN    = ("#34C759", "#30D158")   # vert système iOS
 RADIUS = 16
 
 
+# === MODÈLES DE CALCUL ======================================================
+# C'est ICI que sont définis les 4 modèles de régression proposés à l'utilisateur.
+# Chaque modèle est un pipeline scikit-learn : standardisation (StandardScaler)
+# puis l'algorithme de régression proprement dit. C'est ce dictionnaire qui est
+# utilisé plus bas dans train_model() pour instancier le modèle choisi.
 def build_models():
     """Fabriques de modèles (imports paresseux : la fenêtre s'ouvre sans sklearn)."""
     from sklearn.linear_model import LinearRegression, Ridge
@@ -40,10 +45,15 @@ def build_models():
     from sklearn.pipeline import make_pipeline
 
     return {
+        # Régression linéaire simple (moindres carrés ordinaires)
         "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
+        # Ridge = régression linéaire régularisée (le nom affiché "Polynomiale" est trompeur :
+        # aucune expansion polynomiale n'est faite ici, c'est bien une régression linéaire pénalisée)
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
+        # Modèle d'ensemble à base d'arbres de décision (moyenne de 300 arbres)
         "Forêt aléatoire":     lambda: make_pipeline(StandardScaler(),
                                    RandomForestRegressor(n_estimators=300, random_state=0)),
+        # Boosting de gradient par histogramme (algorithme type LightGBM)
         "Gradient Boosting":   lambda: make_pipeline(StandardScaler(),
                                    HistGradientBoostingRegressor(random_state=0)),
     }
@@ -63,9 +73,15 @@ class RegressionApp(ctk.CTk):
         self.minsize(900, 640)
         self.configure(fg_color=BG)
 
+        # === STOCKAGE DES DONNÉES UTILISATEUR ===================================
+        # self.df contient l'intégralité du CSV chargé par l'utilisateur, tel quel,
+        # en mémoire (RAM) sous forme de DataFrame pandas. Rien n'est persisté sur
+        # disque ni envoyé ailleurs : les données ne vivent que le temps de la
+        # session et sont perdues à la fermeture de l'application ou au rechargement
+        # d'un nouveau fichier (voir load_csv()).
         self.df = None
-        self.input_vars = []    # liste de (colonne, BooleanVar)
-        self.output_vars = []
+        self.input_vars = []    # liste de (colonne, BooleanVar) : colonnes cochées comme entrées X
+        self.output_vars = []   # liste de (colonne, BooleanVar) : colonnes cochées comme sorties y
 
         self._build_header()
         self._build_file_card()
@@ -209,6 +225,8 @@ class RegressionApp(ctk.CTk):
 
     # -------------------------------------------------------------- actions ---
     def load_csv(self):
+        # Ouvre un sélecteur de fichier natif : l'utilisateur choisit un CSV sur
+        # son propre disque (aucun upload réseau, tout se passe en local).
         path = filedialog.askopenfilename(
             title="Choisir un fichier CSV",
             filetypes=[("Fichiers CSV", "*.csv"), ("Tous les fichiers", "*.*")],
@@ -221,16 +239,22 @@ class RegressionApp(ctk.CTk):
             messagebox.showerror("Erreur de lecture", f"Lecture impossible :\n{exc}")
             return
 
+        # >>> Point d'entrée des données utilisateur en mémoire <<<
+        # Le CSV entier est chargé dans self.df (DataFrame pandas), qui reste
+        # l'unique copie des données utilisées pour l'aperçu et l'entraînement.
         self.df = df
         self.file_label.configure(
             text=f"{path.split('/')[-1]}  ·  {df.shape[0]} lignes × {df.shape[1]} colonnes"
         )
         self._populate_checkboxes(df.columns)
-        
+
         self._populate_preview(df)
         self.result_label.configure(text="")
 
     def _populate_checkboxes(self, columns):
+        # Reconstruit la liste des colonnes disponibles (X et y) à partir des
+        # colonnes du CSV chargé dans self.df ; ces cases à cocher déterminent
+        # quelles données utilisateur seront effectivement envoyées au modèle.
         for frame in (self.input_frame, self.output_frame):
             for child in frame.winfo_children():
                 child.destroy()
@@ -254,6 +278,9 @@ class RegressionApp(ctk.CTk):
             self.output_vars.append((col, v_out))
 
     def _populate_preview(self, df):
+        # Affiche uniquement les 10 premières lignes des données utilisateur
+        # (df.head(10)) dans le tableau ; self.df en mémoire contient lui la
+        # totalité du jeu de données.
         self.tree.delete(*self.tree.get_children())
         cols = list(df.columns.astype(str))
         self.tree["columns"] = cols
@@ -267,6 +294,11 @@ class RegressionApp(ctk.CTk):
         return [col for col, v in var_list if v.get()]
 
     def train_model(self):
+        # === CALCUL / ENTRAÎNEMENT DU MODÈLE ====================================
+        # Toute cette méthode constitue le pipeline de calcul : elle part des
+        # données utilisateur (self.df), sélectionne les colonnes X/y choisies
+        # par l'utilisateur, construit le modèle (voir build_models() plus haut)
+        # puis l'évalue par validation croisée.
         if self.df is None:
             messagebox.showwarning("Aucune donnée", "Charge d'abord un fichier CSV.")
             return
@@ -297,6 +329,8 @@ class RegressionApp(ctk.CTk):
             )
             return
 
+        # Extraction du sous-ensemble utile des données utilisateur (colonnes X + y
+        # cochées), conversion en numérique et suppression des lignes incomplètes.
         data = self.df[inputs + outputs].apply(pd.to_numeric, errors="coerce").dropna()
         if data.empty:
             messagebox.showerror(
@@ -315,6 +349,10 @@ class RegressionApp(ctk.CTk):
             messagebox.showwarning("Échantillon", f"Trop peu d'observations ({n}).")
             return
 
+        # Instanciation du modèle choisi dans le menu déroulant (dictionnaire
+        # défini dans build_models() en haut du fichier). Si plusieurs colonnes
+        # de sortie y sont cochées, on enveloppe le modèle dans un
+        # MultiOutputRegressor pour gérer la régression multi-sorties.
         estimator = build_models()[self.model_var.get()]()
         if getattr(y, "ndim", 1) == 2 and y.shape[1] > 1:
             estimator = MultiOutputRegressor(estimator)
@@ -322,6 +360,9 @@ class RegressionApp(ctk.CTk):
         self.result_label.configure(text="Calcul…", text_color=SUBTXT)
         self.update_idletasks()
         try:
+            # Validation croisée en k plis (k=5 max, ou moins si peu de données) :
+            # le modèle est ré-entraîné et évalué k fois sur des découpages
+            # différents des données, puis les scores R² sont moyennés.
             k = min(5, n)
             cv = KFold(n_splits=k, shuffle=True, random_state=0)
             scores = cross_val_score(estimator, X, y, cv=cv, scoring="r2")
