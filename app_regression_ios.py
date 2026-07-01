@@ -17,6 +17,8 @@ from tkinter import ttk, filedialog, messagebox
 
 import customtkinter as ctk
 import pandas as pd
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.linear_model import LinearRegression
 
 
 
@@ -39,8 +41,10 @@ def build_models():
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
 
+
     return {
-        "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
+        "Régression linéaire": lambda: make_pipeline(StandardScaler(), MaRegressionLineaire()),
+        #"Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
         "Forêt aléatoire":     lambda: make_pipeline(StandardScaler(),
                                    RandomForestRegressor(n_estimators=300, random_state=0)),
@@ -53,6 +57,20 @@ MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléa
 
 
 class RegressionApp(ctk.CTk):
+
+    class MaRegressionLineaire(BaseEstimator, RegressorMixin):
+        
+        def __init__(self):
+            self.modele = LinearRegression()
+
+        def fit(self, X, y):
+            self.modele.fit(X, y)
+            return self
+
+        def predict(self, X):
+            predictions = self.modele.predict(X)
+            return predictions
+        
     def __init__(self):
         super().__init__()
         ctk.set_appearance_mode("light")
