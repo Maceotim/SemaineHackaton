@@ -39,6 +39,20 @@ RADIUS = 16
 # Chaque modèle est un pipeline scikit-learn : standardisation (StandardScaler)
 # puis l'algorithme de régression proprement dit. C'est ce dictionnaire qui est
 # utilisé plus bas dans train_model() pour instancier le modèle choisi.
+
+class MaRegressionLineaire(BaseEstimator, RegressorMixin):
+        
+    def __init__(self):
+        self.modele = LinearRegression()
+
+    def fit(self, X, y):
+        self.modele.fit(X, y)
+        return self
+
+    def predict(self, X):
+        predictions = self.modele.predict(X)
+        return predictions
+
 def build_models():
     """Fabriques de modèles (imports paresseux : la fenêtre s'ouvre sans sklearn)."""
     from sklearn.linear_model import LinearRegression, Ridge
@@ -49,7 +63,7 @@ def build_models():
 
     return {
         # Régression linéaire simple (moindres carrés ordinaires)
-        "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
+        "Régression linéaire": lambda: make_pipeline(StandardScaler(), MaRegressionLineaire()),
         # Ridge = régression linéaire régularisée (le nom affiché "Polynomiale" est trompeur :
         # aucune expansion polynomiale n'est faite ici, c'est bien une régression linéaire pénalisée)
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
@@ -66,19 +80,6 @@ MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléa
 
 
 class RegressionApp(ctk.CTk):
-
-    class MaRegressionLineaire(BaseEstimator, RegressorMixin):
-        
-        def __init__(self):
-            self.modele = LinearRegression()
-
-        def fit(self, X, y):
-            self.modele.fit(X, y)
-            return self
-
-        def predict(self, X):
-            predictions = self.modele.predict(X)
-            return predictions
         
     def __init__(self):
         super().__init__()
