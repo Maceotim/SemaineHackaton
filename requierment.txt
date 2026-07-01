@@ -1,0 +1,3 @@
+Nous utilisons les bibliothèques pandas, numpy, sklearn ainsi que custom tkinter pour l'interface.
+Elle doivent donc être installé sur l'appareil client.
+De plus la base de donnée fournis dans l'interface doit être " en un seul morceau ". C'est à dire les éventuelles jointures déjà faites.
