@@ -7,8 +7,8 @@ Fonctionnalités (identiques à la version Tkinter, habillage modernisé) :
   3. Aperçu des 10 premières lignes.
   4. Menu déroulant à 4 modèles + évaluation en validation croisée (R²).
 
-Dépendances : customtkinter, pandas, scikit-learn
-Installation : pip install customtkinter pandas scikit-learn
+Dépendances : customtkinter, pandas, scikit-learn, xgboost, optuna
+Installation : pip install customtkinter pandas scikit-learn xgboost optuna
 Lancement    : python app_regression_ios.py
 """
 
@@ -16,6 +16,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import customtkinter as ctk
+import numpy as np
 import pandas as pd
 
 
@@ -33,14 +34,19 @@ RADIUS = 16
 
 
 # === MODÈLES DE CALCUL ======================================================
-# C'est ICI que sont définis les 4 modèles de régression proposés à l'utilisateur.
-# Chaque modèle est un pipeline scikit-learn : standardisation (StandardScaler)
-# puis l'algorithme de régression proprement dit. C'est ce dictionnaire qui est
-# utilisé plus bas dans train_model() pour instancier le modèle choisi.
+# C'est ICI que sont définis les modèles de régression proposés à l'utilisateur.
+# Les 3 premiers sont des pipelines scikit-learn : standardisation (StandardScaler)
+# puis l'algorithme de régression proprement dit. Le 4e (XGB_LABEL) ne vient pas
+# de ce dictionnaire : il est traité à part dans train_model() car il s'appuie
+# sur optimize_xgboost() (optimize_xgboost.py), qui fait son propre split
+# train/test, sa validation croisée et son réglage fin Optuna.
+XGB_LABEL = "Gradient Boosting (XGBoost auto-optimisé)"
+
+
 def build_models():
     """Fabriques de modèles (imports paresseux : la fenêtre s'ouvre sans sklearn)."""
     from sklearn.linear_model import LinearRegression, Ridge
-    from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+    from sklearn.ensemble import RandomForestRegressor
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
 
@@ -53,13 +59,21 @@ def build_models():
         # Modèle d'ensemble à base d'arbres de décision (moyenne de 300 arbres)
         "Forêt aléatoire":     lambda: make_pipeline(StandardScaler(),
                                    RandomForestRegressor(n_estimators=300, random_state=0)),
-        # Boosting de gradient par histogramme (algorithme type LightGBM)
-        "Gradient Boosting":   lambda: make_pipeline(StandardScaler(),
-                                   HistGradientBoostingRegressor(random_state=0)),
     }
 
 
-MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléatoire", "Gradient Boosting"]
+MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléatoire", XGB_LABEL]
+
+
+class _XGBBoosterPredictor:
+    """Enveloppe un Booster XGBoost pour exposer un .predict(X) identique aux estimateurs scikit-learn."""
+
+    def __init__(self, booster):
+        self.booster = booster
+
+    def predict(self, X):
+        import xgboost as xgb
+        return self.booster.predict(xgb.DMatrix(X))
 
 
 class RegressionApp(ctk.CTk):
@@ -84,6 +98,7 @@ class RegressionApp(ctk.CTk):
         self.output_vars = []   # liste de (colonne, BooleanVar) : colonnes cochées comme sorties y
         self.trained_model = None       # dernier modèle entraîné sur l'ensemble des données (exportable)
         self.trained_model_meta = None  # infos associées (colonnes X/y, nom du modèle)
+        self.groups_col = None  # nom de la colonne de regroupement ('essai') détectée automatiquement
 
         self._build_header()
         self._build_file_card()
@@ -243,7 +258,14 @@ class RegressionApp(ctk.CTk):
         if not path:
             return
         try:
-            df = pd.read_csv(path, sep=None, engine="python")   # détection auto du séparateur
+            # encoding="utf-8-sig" : retire le BOM UTF-8 en tête de fichier s'il est
+            # présent (Excel en ajoute un). Sans ça, la 1re colonne se retrouve
+            # nommée "﻿essai" au lieu de "essai" : la détection de la colonne
+            # de regroupement ci-dessous échoue silencieusement (self.groups_col
+            # reste None), ce qui casse a la fois l'exclusion de "essai" des cases
+            # a cocher et le split train/test par groupe (fuite de donnees -> R²
+            # artificiellement gonflé).
+            df = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
         except Exception as exc:
             messagebox.showerror("Erreur de lecture", f"Lecture impossible :\n{exc}")
             return
@@ -252,10 +274,22 @@ class RegressionApp(ctk.CTk):
         # Le CSV entier est chargé dans self.df (DataFrame pandas), qui reste
         # l'unique copie des données utilisées pour l'aperçu et l'entraînement.
         self.df = df
-        self.file_label.configure(
-            text=f"{path.split('/')[-1]}  ·  {df.shape[0]} lignes × {df.shape[1]} colonnes"
-        )
-        self._populate_checkboxes(df.columns)
+
+        # Détection automatique d'une colonne de regroupement ('essai') : plusieurs
+        # lignes peuvent provenir du même essai/individu ; on évite qu'un même
+        # essai se retrouve à la fois en train et en test/CV (fuite de données).
+        # Cette colonne n'est ni une entrée X ni une sortie y : elle est retirée
+        # des cases à cocher et utilisée directement comme `groups` à l'entraînement.
+        group_candidates = [c for c in df.columns if str(c).strip().lower() == "essai"]
+        self.groups_col = group_candidates[0] if group_candidates else None
+
+        label = f"{path.split('/')[-1]}  ·  {df.shape[0]} lignes × {df.shape[1]} colonnes"
+        if self.groups_col:
+            label += f"  ·  regroupement auto par « {self.groups_col} »"
+        self.file_label.configure(text=label)
+
+        checkbox_cols = [c for c in df.columns if c != self.groups_col]
+        self._populate_checkboxes(checkbox_cols)
 
         self._populate_preview(df)
         self.result_label.configure(text="")
@@ -309,8 +343,10 @@ class RegressionApp(ctk.CTk):
         # === CALCUL / ENTRAÎNEMENT DU MODÈLE ====================================
         # Toute cette méthode constitue le pipeline de calcul : elle part des
         # données utilisateur (self.df), sélectionne les colonnes X/y choisies
-        # par l'utilisateur, construit le modèle (voir build_models() plus haut)
-        # puis l'évalue par validation croisée.
+        # par l'utilisateur, construit le modèle puis l'évalue. Pour XGB_LABEL,
+        # tout le travail (split, CV, réglage Optuna, métriques) est délégué à
+        # optimize_xgboost() (optimize_xgboost.py) ; pour les 3 autres modèles,
+        # on garde le pipeline scikit-learn + validation croisée existant.
         if self.df is None:
             messagebox.showwarning("Aucune donnée", "Charge d'abord un fichier CSV.")
             return
@@ -331,15 +367,7 @@ class RegressionApp(ctk.CTk):
             )
             return
 
-        try:
-            from sklearn.model_selection import cross_val_score, KFold
-            from sklearn.multioutput import MultiOutputRegressor
-        except ImportError:
-            messagebox.showerror(
-                "Dépendance manquante",
-                "scikit-learn n'est pas installé.\n\npip install scikit-learn",
-            )
-            return
+        model_name = self.model_var.get()
 
         # Extraction du sous-ensemble utile des données utilisateur (colonnes X + y
         # cochées), conversion en numérique et suppression des lignes incomplètes.
@@ -351,38 +379,77 @@ class RegressionApp(ctk.CTk):
             )
             return
 
+        # Colonne de regroupement ('essai') alignée sur les lignes conservées :
+        # on retire aussi les lignes où elle est manquante, sinon un groupe NaN
+        # se retrouverait mélangé entre train et test.
+        groups = None
+        if self.groups_col:
+            groups_series = self.df.loc[data.index, self.groups_col]
+            valid = groups_series.notna()
+            data = data[valid]
+            groups_series = groups_series[valid]
+            groups = groups_series.values
+
         X = data[inputs].values
         y = data[outputs].values
-        if y.shape[1] == 1:
-            y = y.ravel()
 
         n = X.shape[0]
         if n < 5:
             messagebox.showwarning("Échantillon", f"Trop peu d'observations ({n}).")
             return
 
-        # Instanciation du modèle choisi dans le menu déroulant (dictionnaire
-        # défini dans build_models() en haut du fichier). Si plusieurs colonnes
-        # de sortie y sont cochées, on enveloppe le modèle dans un
-        # MultiOutputRegressor pour gérer la régression multi-sorties.
-        estimator = build_models()[self.model_var.get()]()
-        if getattr(y, "ndim", 1) == 2 and y.shape[1] > 1:
-            estimator = MultiOutputRegressor(estimator)
-
         self.result_label.configure(text="Calcul…", text_color=SUBTXT)
         self.export_button.configure(state="disabled")
         self.trained_model = None
         self.trained_model_meta = None
         self.update_idletasks()
+
+        if model_name == XGB_LABEL:
+            self._train_xgboost(inputs, outputs, X, y, n, groups)
+        else:
+            self._train_sklearn(model_name, inputs, outputs, X, y, n, groups)
+
+    def _train_sklearn(self, model_name, inputs, outputs, X, y, n, groups):
+        try:
+            from sklearn.model_selection import cross_validate, KFold, GroupKFold
+            from sklearn.multioutput import MultiOutputRegressor
+        except ImportError:
+            messagebox.showerror(
+                "Dépendance manquante",
+                "scikit-learn n'est pas installé.\n\npip install scikit-learn",
+            )
+            return
+
+        if y.shape[1] == 1:
+            y = y.ravel()
+
+        # Instanciation du modèle choisi dans le menu déroulant (dictionnaire
+        # défini dans build_models() en haut du fichier). Si plusieurs colonnes
+        # de sortie y sont cochées, on enveloppe le modèle dans un
+        # MultiOutputRegressor pour gérer la régression multi-sorties.
+        estimator = build_models()[model_name]()
+        if getattr(y, "ndim", 1) == 2 and y.shape[1] > 1:
+            estimator = MultiOutputRegressor(estimator)
+
         try:
             # Validation croisée en k plis (k=5 max, ou moins si peu de données) :
             # le modèle est ré-entraîné et évalué k fois sur des découpages
             # différents des données, puis les scores R² sont moyennés. Ceci ne
             # sert qu'à MESURER la qualité du modèle (chaque modèle entraîné
-            # pendant la CV est jeté ensuite)
-            k = min(5, n)
-            cv = KFold(n_splits=k, shuffle=True, random_state=0)
-            scores = cross_val_score(estimator, X, y, cv=cv, scoring="r2")
+            # pendant la CV est jeté ensuite). Si une colonne de regroupement est
+            # détectée ('essai'), les plis respectent les groupes (GroupKFold) pour
+            # qu'un même essai ne se retrouve jamais scindé entre deux plis.
+            scoring = ["r2", "neg_root_mean_squared_error"]
+            if groups is not None:
+                k = min(5, n, len(np.unique(groups)))
+                cv = GroupKFold(n_splits=k)
+                cv_results = cross_validate(estimator, X, y, cv=cv, groups=groups, scoring=scoring)
+            else:
+                k = min(5, n)
+                cv = KFold(n_splits=k, shuffle=True, random_state=0)
+                cv_results = cross_validate(estimator, X, y, cv=cv, scoring=scoring)
+            r2_scores = cv_results["test_r2"]
+            rmse_scores = -cv_results["test_neg_root_mean_squared_error"]
 
             # Modèle final exportable : ré-entraîné une dernière fois sur
             # l'intégralité des données (X, y), pour tirer parti de toutes les
@@ -394,15 +461,84 @@ class RegressionApp(ctk.CTk):
             return
 
         self.result_label.configure(
-            text=f"R² (CV {k}-plis) = {scores.mean():.3f}  ±  {scores.std():.3f}",
+            text=(
+                f"R² (CV {k}-plis) = {r2_scores.mean():.3f} ± {r2_scores.std():.3f}  ·  "
+                f"RMSE = {rmse_scores.mean():.3f} ± {rmse_scores.std():.3f}"
+            ),
             text_color=GREEN,
         )
 
         self.trained_model = estimator
         self.trained_model_meta = {
-            "model_name": self.model_var.get(),
+            "model_name": model_name,
             "inputs": inputs,
             "outputs": outputs,
+        }
+        self.export_button.configure(state="normal")
+
+    def _train_xgboost(self, inputs, outputs, X, y, n, groups):
+        if y.shape[1] > 1:
+            self.result_label.configure(text="")
+            messagebox.showwarning(
+                "Sélection",
+                f"{XGB_LABEL} ne gère qu'une seule colonne de sortie y à la fois.\n"
+                "Décoche les autres sorties ou choisis un autre modèle.",
+            )
+            return
+
+        try:
+            from optimize_xgboost import optimize_xgboost
+        except ImportError:
+            messagebox.showerror(
+                "Dépendance manquante",
+                "xgboost et optuna sont nécessaires.\n\npip install xgboost optuna",
+            )
+            return
+
+        # Peu de données (ou peu de groupes distincts) : on réduit le nombre de
+        # plis de validation croisée (par défaut 5 dans optimize_xgboost) pour
+        # éviter des plis trop petits. `groups` (colonne 'essai') est transmis
+        # tel quel à optimize_xgboost, qui l'utilise pour le split train/test
+        # (GroupShuffleSplit) et la CV (GroupKFold) : un même essai ne se
+        # retrouve jamais scindé entre train et test.
+        effective_n = len(np.unique(groups)) if groups is not None else n
+        nfold = min(5, max(2, effective_n // 3))
+
+        self.result_label.configure(
+            text="Optimisation XGBoost en cours (réglage Optuna, peut prendre un peu de temps)…",
+            text_color=SUBTXT,
+        )
+        self.update_idletasks()
+        try:
+            result = optimize_xgboost(
+                X, y.ravel(),
+                groups=groups,
+                objective="reg:squarederror",
+                eval_metric="rmse",
+                n_trials=20,        # budget Optuna réduit pour rester réactif dans l'UI
+                nfold=nfold,
+                verbose=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.result_label.configure(text="")
+            messagebox.showerror("Erreur d'entraînement", str(exc))
+            return
+
+        metrics = result["test_metrics"]
+        self.result_label.configure(
+            text=(
+                f"R² (test) = {metrics['r2']:.3f}  ·  RMSE = {metrics['rmse']:.3f}  ·  "
+                f"{result['n_rounds']} arbres"
+            ),
+            text_color=GREEN,
+        )
+
+        self.trained_model = _XGBBoosterPredictor(result["model"])
+        self.trained_model_meta = {
+            "model_name": XGB_LABEL,
+            "inputs": inputs,
+            "outputs": outputs,
+            "best_params": result["best_params"],
         }
         self.export_button.configure(state="normal")
 

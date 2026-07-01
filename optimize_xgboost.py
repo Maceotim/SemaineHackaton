@@ -297,7 +297,7 @@ if __name__ == "__main__":
 
     # Séparation des features et de la target (on garde 'essai' pour le groupby ci-dessous
     # et pour le passer en `groups` a optimize_xgboost, afin d'eviter les fuites train/test)
-    df_ut = df[['P1_reel','Lq_reel','P4','E2','E1','S_moy','sigma_S','essai']]
+    df_ut = df[['P1_reel','P2','Lt','Lq_reel','P4','P5','V','E2','P6_reel','E1', 'essai']]
 
     #On remplace les valeurs manquantes de P1_reel et Lq_reel par la première valeur non nulle de chaque essai selon les conseils de l'encadrante
     #Cela permet de conserver d'avantage de lignes avant le dropna()
@@ -309,8 +309,8 @@ if __name__ == "__main__":
 
 
     df_ut = df_ut.dropna()  # Supprimer les lignes avec des valeurs manquantes
-    X1 = df_ut.drop(columns=['S_moy', 'sigma_S', 'essai'])  # Variables explicatives
-    y1 = df_ut['S_moy']
+    X1 = df_ut.drop(columns=['E1'])  # Variables explicatives
+    y1 = df_ut['E1']
     groups1 = df_ut['essai']  # plusieurs lignes par essai : on evite qu'un meme essai
                                # se retrouve a la fois en train et en test/CV
     result = optimize_xgboost(
