@@ -82,6 +82,8 @@ class RegressionApp(ctk.CTk):
         self.df = None
         self.input_vars = []    # liste de (colonne, BooleanVar) : colonnes cochées comme entrées X
         self.output_vars = []   # liste de (colonne, BooleanVar) : colonnes cochées comme sorties y
+        self.trained_model = None       # dernier modèle entraîné sur l'ensemble des données (exportable)
+        self.trained_model_meta = None  # infos associées (colonnes X/y, nom du modèle)
 
         self._build_header()
         self._build_file_card()
@@ -201,6 +203,13 @@ class RegressionApp(ctk.CTk):
         )
         self.result_label.pack(side="left", padx=16)
 
+        self.export_button = ctk.CTkButton(
+            bar, text="Exporter le modèle", command=self.export_model,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
+        )
+        self.export_button.pack(side="right")
+
     # --------------------------------------------------------------- thèmes ---
     def _toggle_mode(self, value):
         ctk.set_appearance_mode("dark" if value == "Sombre" else "light")
@@ -250,6 +259,9 @@ class RegressionApp(ctk.CTk):
 
         self._populate_preview(df)
         self.result_label.configure(text="")
+        self.trained_model = None
+        self.trained_model_meta = None
+        self.export_button.configure(state="disabled")
 
     def _populate_checkboxes(self, columns):
         # Reconstruit la liste des colonnes disponibles (X et y) à partir des
@@ -358,14 +370,24 @@ class RegressionApp(ctk.CTk):
             estimator = MultiOutputRegressor(estimator)
 
         self.result_label.configure(text="Calcul…", text_color=SUBTXT)
+        self.export_button.configure(state="disabled")
+        self.trained_model = None
+        self.trained_model_meta = None
         self.update_idletasks()
         try:
             # Validation croisée en k plis (k=5 max, ou moins si peu de données) :
             # le modèle est ré-entraîné et évalué k fois sur des découpages
-            # différents des données, puis les scores R² sont moyennés.
+            # différents des données, puis les scores R² sont moyennés. Ceci ne
+            # sert qu'à MESURER la qualité du modèle (chaque modèle entraîné
+            # pendant la CV est jeté ensuite).
             k = min(5, n)
             cv = KFold(n_splits=k, shuffle=True, random_state=0)
             scores = cross_val_score(estimator, X, y, cv=cv, scoring="r2")
+
+            # Modèle final exportable : ré-entraîné une dernière fois sur
+            # l'intégralité des données (X, y), pour tirer parti de toutes les
+            # observations disponibles avant l'export.
+            estimator.fit(X, y)
         except Exception as exc:  # noqa: BLE001
             self.result_label.configure(text="")
             messagebox.showerror("Erreur d'entraînement", str(exc))
@@ -375,6 +397,49 @@ class RegressionApp(ctk.CTk):
             text=f"R² (CV {k}-plis) = {scores.mean():.3f}  ±  {scores.std():.3f}",
             text_color=GREEN,
         )
+
+        self.trained_model = estimator
+        self.trained_model_meta = {
+            "model_name": self.model_var.get(),
+            "inputs": inputs,
+            "outputs": outputs,
+        }
+        self.export_button.configure(state="normal")
+
+    def export_model(self):
+        # Sauvegarde sur disque du modèle final (entraîné sur toutes les
+        # données) au format joblib, avec les métadonnées nécessaires pour le
+        # réutiliser (colonnes X/y attendues, nom du modèle).
+        if self.trained_model is None:
+            messagebox.showwarning("Aucun modèle", "Entraîne d'abord un modèle.")
+            return
+
+        try:
+            import joblib
+        except ImportError:
+            messagebox.showerror(
+                "Dépendance manquante",
+                "joblib n'est pas installé.\n\npip install joblib",
+            )
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Exporter le modèle",
+            defaultextension=".joblib",
+            filetypes=[("Modèle joblib", "*.joblib"), ("Tous les fichiers", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            joblib.dump(
+                {"model": self.trained_model, **self.trained_model_meta}, path
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Erreur d'export", str(exc))
+            return
+
+        messagebox.showinfo("Export réussi", f"Modèle enregistré :\n{path}")
 
 
 if __name__ == "__main__":
