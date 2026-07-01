@@ -379,7 +379,7 @@ class RegressionApp(ctk.CTk):
             # le modèle est ré-entraîné et évalué k fois sur des découpages
             # différents des données, puis les scores R² sont moyennés. Ceci ne
             # sert qu'à MESURER la qualité du modèle (chaque modèle entraîné
-            # pendant la CV est jeté ensuite).
+            # pendant la CV est jeté ensuite)
             k = min(5, n)
             cv = KFold(n_splits=k, shuffle=True, random_state=0)
             scores = cross_val_score(estimator, X, y, cv=cv, scoring="r2")
