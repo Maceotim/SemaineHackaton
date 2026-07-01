@@ -47,6 +47,7 @@ class MaRegressionLineaire(BaseEstimator, RegressorMixin):
 
     def fit(self, X, y):
         self.modele.fit(X, y)
+        self.is_fitted_ = True 
         return self
 
     def predict(self, X):
