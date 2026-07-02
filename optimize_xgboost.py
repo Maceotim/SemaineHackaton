@@ -1,34 +1,15 @@
-"""
-optimize_xgboost — Fonction unique d'optimisation XGBoost
-
-Encapsule les 6 phases de la stratégie :
-  Phase 0 : rythme d'apprentissage + baseline
-  Phase 1 : taille de chaque élève (max_depth, min_child_weight)
-  Phase 2 : seuil de motivation pour couper une branche (gamma)
-  Phase 3 : empêcher les élèves de tous penser pareil (subsample, colsample)
-  Phase 4 : pénaliser les corrections trop violentes (lambda, alpha)
-  Phase 5 : affinage fin automatique (Optuna) autour de la bonne zone
-  Phase 6 : examen final honnête + métriques (RMSE, R² en régression)
-
-ENTRÉE  : X (variables explicatives), y (cible)
-SORTIE  : dict contenant le modèle final, les paramètres, et test_metrics
-
-"""
 import pandas as pd
 import numpy as np
 import xgboost as xgb
 import optuna
 from optuna.samplers import TPESampler
-from sklearn.model_selection import train_test_split, GroupShuffleSplit, GroupKFold
+from sklearn.model_selection import (
+    train_test_split, GroupShuffleSplit, KFold, StratifiedKFold,
+)
 from sklearn.metrics import (
     mean_squared_error, mean_absolute_error, r2_score,
     accuracy_score, log_loss, roc_auc_score,
 )
-
-try:
-    from sklearn.model_selection import StratifiedGroupKFold
-except ImportError:  # sklearn < 1.0
-    StratifiedGroupKFold = None
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -53,10 +34,16 @@ def optimize_xgboost(
     Optimise un modele XGBoost de bout en bout.
 
     Si `groups` est fourni (ex. un identifiant d'essai quand plusieurs lignes
-    proviennent du meme essai/individu), le split train/test et les plis de
-    validation croisee respectent les groupes : toutes les lignes d'un meme
-    groupe restent ensemble, cote train OU cote test, jamais les deux. Cela
-    evite une fuite d'information qui gonflerait artificiellement les scores.
+    proviennent du meme essai/individu), le split train/test respecte les
+    groupes : toutes les lignes d'un meme groupe restent ensemble, cote train
+    OU cote test, jamais les deux. Cela evite qu'un essai deja vu en train se
+    retrouve en test, ce qui gonflerait artificiellement le score final.
+    La validation croisee interne (Phases 1 a 5, choix des hyperparametres)
+    n'utilise en revanche PAS `groups` : elle decoupe le train set ligne par
+    ligne (KFold/StratifiedKFold), pour beneficier de plus de plis et de plus
+    de donnees par pli, surtout utile quand il y a peu de groupes distincts.
+    Cela ne concerne que le reglage des hyperparametres ; la metrique finale
+    rapportee (test_metrics) reste calculee sur le test set groupe.
 
     Retourne un dict :
         'model'        : modele XGBoost final entraine (xgb.Booster)
@@ -81,6 +68,9 @@ def optimize_xgboost(
     maximize = eval_metric in maximize_metrics  # sens d'optimisation de la metrique
 
     # --- Separation train / test (le test est isole jusqu'a la Phase 6) -----
+    # `groups` ne sert QU'a cette separation-la : on veut une mesure honnete
+    # de generalisation a un essai jamais vu (le test set final, evalue une
+    # seule fois en Phase 6, ne doit jamais contenir un essai deja vu en train).
     if groups is not None:
         groups = np.asarray(groups)
         train_idx, test_idx = next(
@@ -91,7 +81,6 @@ def optimize_xgboost(
         X_test = X.iloc[test_idx] if hasattr(X, "iloc") else X[test_idx]
         y_train = y.iloc[train_idx] if hasattr(y, "iloc") else y[train_idx]
         y_test = y.iloc[test_idx] if hasattr(y, "iloc") else y[test_idx]
-        groups_train = groups[train_idx]
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,
@@ -99,7 +88,6 @@ def optimize_xgboost(
             stratify=y if stratified else None,
             random_state=seed,
         )
-        groups_train = None
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dtest = xgb.DMatrix(X_test, label=y_test)
 
@@ -111,15 +99,22 @@ def optimize_xgboost(
             raise ValueError("num_class doit etre fourni pour objective='multi:softprob'.")
         fixed["num_class"] = num_class
 
-    # --- Plis de CV : respectent les groupes s'il y en a -------------------
-    if groups_train is not None:
-        if stratified and StratifiedGroupKFold is not None:
-            splitter = StratifiedGroupKFold(n_splits=nfold, shuffle=True, random_state=seed)
-        else:
-            splitter = GroupKFold(n_splits=nfold)
-        cv_folds = list(splitter.split(X_train, y_train, groups_train))
+    # --- Plis de CV (reglage des hyperparametres, Phases 1 a 5 uniquement) --
+    # Deliberement PAS groupes par essai, meme si `groups` est fourni : cette CV
+    # ne sert qu'a comparer des jeux d'hyperparametres entre eux, pas a mesurer
+    # la performance finale (celle-ci vient du test set, lui reste groupe et
+    # jamais touche avant la Phase 6). En l'ungroupant, on exploite chaque ligne
+    # du train individuellement -> des plis plus nombreux et plus stables,
+    # surtout utile quand il y a peu d'essais distincts (CV par groupe alors
+    # trop bruitee, ex. 2 plis pour 6 essais). Le cout : un score de CV
+    # legerement optimiste (des lignes d'un meme essai peuvent se retrouver de
+    # part et d'autre d'un pli), qui influence seulement le choix des
+    # hyperparametres, pas la metrique finale rapportee.
+    if stratified:
+        splitter = StratifiedKFold(n_splits=nfold, shuffle=True, random_state=seed)
     else:
-        cv_folds = None
+        splitter = KFold(n_splits=nfold, shuffle=True, random_state=seed)
+    cv_folds = list(splitter.split(X_train, y_train))
 
     # --- Outil interne : la "note" d'une configuration (validation croisee) --
     def cv_score(params, num_boost_round=5000):
