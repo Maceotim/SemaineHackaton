@@ -1,7 +1,5 @@
 """
-=============================================================================
 optimize_xgboost — Fonction unique d'optimisation XGBoost
-=============================================================================
 
 Encapsule les 6 phases de la stratégie :
   Phase 0 : rythme d'apprentissage + baseline
@@ -14,7 +12,7 @@ Encapsule les 6 phases de la stratégie :
 
 ENTRÉE  : X (variables explicatives), y (cible)
 SORTIE  : dict contenant le modèle final, les paramètres, et test_metrics
-=============================================================================
+
 """
 import pandas as pd
 import numpy as np
@@ -41,8 +39,8 @@ def optimize_xgboost(
     groups=None,                     # id de groupe (ex. 'essai') : evite les fuites train/test et CV
     objective="binary:logistic",   # tache : 'reg:squarederror', 'binary:logistic', 'multi:softprob'...
     eval_metric="logloss",         # metrique pilotant early stopping + selection (coherente avec objective)
-    num_class=None,                 # obligatoire si objective='multi:softprob'
-    test_size=0.2,                  # part mise sous scelles pour l'examen final (Phase 6)
+    num_class=None,                 
+    test_size=0.2,                  
     n_trials=150,                   # budget de la recherche fine Optuna (Phase 5)
     nfold=5,                        # nb de plis de validation croisee
     eta_start=0.3,                 # rythme d'apprentissage pendant le reglage (Phases 0-4)
@@ -147,9 +145,8 @@ def optimize_xgboost(
         return a > b if maximize else a < b
     worst = -np.inf if maximize else np.inf
 
-    # =====================================================================
     # PHASE 0 — Rythme d'apprentissage + baseline
-    # =====================================================================
+
     p = {
         "eta": eta_start,
         "max_depth": 6, "min_child_weight": 1,
@@ -158,9 +155,8 @@ def optimize_xgboost(
     }
     score, std, n_rounds = cv_score(p)
 
-    # =====================================================================
     # PHASE 1 — Taille de chaque eleve (regles ENSEMBLE car couples)
-    # =====================================================================
+
     best = worst; combo = None
     for depth in [3, 4, 5, 6, 7, 8]:
         for min_cw in [1, 3, 5, 7]:
@@ -169,9 +165,8 @@ def optimize_xgboost(
                 best, combo = s, (depth, min_cw)
     p["max_depth"], p["min_child_weight"] = combo
 
-    # =====================================================================
     # PHASE 2 — Seuil de motivation pour couper une branche (gamma)
-    # =====================================================================
+
     best = worst; g_opt = 0
     for gamma in [0, 0.1, 0.2, 0.3, 0.5, 1.0]:
         s, _, _ = cv_score({**p, "gamma": gamma})
@@ -179,9 +174,9 @@ def optimize_xgboost(
             best, g_opt = s, gamma
     p["gamma"] = g_opt
 
-    # =====================================================================
+
     # PHASE 3 — Empecher les eleves de tous penser pareil
-    # =====================================================================
+
     best = worst; combo = None
     for sub in [0.6, 0.7, 0.8, 0.9, 1.0]:
         for col in [0.6, 0.7, 0.8, 0.9, 1.0]:
@@ -190,9 +185,9 @@ def optimize_xgboost(
                 best, combo = s, (sub, col)
     p["subsample"], p["colsample_bytree"] = combo
 
-    # =====================================================================
+
     # PHASE 4 — Penaliser les corrections trop violentes (lambda, alpha)
-    # =====================================================================
+
     best = worst; combo = None
     for lam in [0, 0.1, 1, 5, 10, 50]:
         for alp in [0, 0.1, 1, 5, 10]:
@@ -201,9 +196,9 @@ def optimize_xgboost(
                 best, combo = s, (lam, alp)
     p["lambda"], p["alpha"] = combo
 
-    # =====================================================================
+
     # PHASE 5 — Affinage fin automatique (Optuna) AUTOUR de la bonne zone
-    # =====================================================================
+
     d_opt, mcw_opt = p["max_depth"], p["min_child_weight"]
     g_opt = p["gamma"]
     sub_opt, col_opt = p["subsample"], p["colsample_bytree"]
@@ -236,13 +231,11 @@ def optimize_xgboost(
     best_params = {**fixed, **study.best_params, "eta": eta_final}
     final_n_rounds = study.best_trial.user_attrs["n_rounds"]
 
-    # =====================================================================
     # PHASE 6 — Examen final honnete + calcul des metriques sur le test set
-    # -----------------------------------------------------------------------
     # Le modele final est entraine sur TOUT le train, puis evalue UNE SEULE
     # FOIS sur le test set jamais touche. On calcule ici les metriques
     # metier adaptees au type de tache.
-    # =====================================================================
+
     model = xgb.train(best_params, dtrain, num_boost_round=final_n_rounds)
     raw_preds = model.predict(dtest)  # regression : valeurs ; binaire : proba ; multi : matrice proba
 
@@ -282,49 +275,3 @@ def optimize_xgboost(
         "test_metrics": test_metrics,
         "study": study,
     }
-
-
-# =============================================================================
-# EXEMPLE D'UTILISATION — REGRESSION (RMSE + R2) avec S_moy
-# =============================================================================
-if __name__ == "__main__":
-    df = pd.read_csv('mes_donnees_normalisées.csv', sep=';')
-    df.columns = df.columns.str.strip()
-    #Modification de la colonne Lt pour la transformer en variable numérique pour le random Forest
-    df.loc[df['Lt'] == 'R', 'Lt'] = 0 
-    df.loc[df['Lt'] == 'G', 'Lt'] = 1
-    #Préparation des données 
-
-    # Séparation des features et de la target (on garde 'essai' pour le groupby ci-dessous
-    # et pour le passer en `groups` a optimize_xgboost, afin d'eviter les fuites train/test)
-    df_ut = df[['P1_reel','P2','Lt','Lq_reel','P4','P5','V','E2','P6_reel','E1', 'essai']]
-
-    #On remplace les valeurs manquantes de P1_reel et Lq_reel par la première valeur non nulle de chaque essai selon les conseils de l'encadrante
-    #Cela permet de conserver d'avantage de lignes avant le dropna()
-    p1_v0_par_essai = df[df['V'] == 0].groupby('essai')['P1_reel'].first()
-    df_ut['P1_reel'] = df['essai'].map(p1_v0_par_essai).fillna(df['P1_reel'])
-
-    lq_valide_par_essai = df.dropna(subset=['Lq_reel']).groupby('essai')['Lq_reel'].first()
-    df_ut['Lq_reel'] = df['essai'].map(lq_valide_par_essai).fillna(df['Lq_reel'])
-
-
-    df_ut = df_ut.dropna()  # Supprimer les lignes avec des valeurs manquantes
-    X1 = df_ut.drop(columns=['E1'])  # Variables explicatives
-    y1 = df_ut['E1']
-    groups1 = df_ut['essai']  # plusieurs lignes par essai : on evite qu'un meme essai
-                               # se retrouve a la fois en train et en test/CV
-    result = optimize_xgboost(
-        X1, y1,
-        groups=groups1,
-        objective="reg:squarederror",  # minimise l'erreur quadratique (= minimise RMSE)
-        eval_metric="rmse",            # R2 est maximise mecaniquement (monotone au RMSE)
-        n_trials=50,
-    )
-
-    print("\n=== Resultat final ===")
-    print("Nb d'arbres        :", result["n_rounds"])
-    print("Score CV (Phase 5) :", round(result["cv_score"], 4))
-    print("Metriques test     :", {k: round(v, 4) for k, v in result["test_metrics"].items()})
-
-    # Prediction sur de nouvelles donnees :
-    # preds = result["model"].predict(xgb.DMatrix(X_nouveau))
