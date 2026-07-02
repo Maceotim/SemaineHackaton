@@ -817,6 +817,7 @@ class RegressionApp(ctk.CTk):
                 self.input_frame, text=str(col), variable=v_in,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.input_vars.append((col, v_in))
 
@@ -825,8 +826,30 @@ class RegressionApp(ctk.CTk):
                 self.output_frame, text=str(col), variable=v_out,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.output_vars.append((col, v_out))
+
+    def _refresh_preview_selection(self):
+        """Callback des cases X/y : ne garde dans l'aperçu que les colonnes actuellement cochées.
+
+        Utilité :
+            Recalcule à chaque coche/décoche l'ensemble des colonnes sélectionnées
+            (entrées X ∪ sorties y) et redessine `self.tree` avec uniquement ces
+            colonnes, dans l'ordre du CSV d'origine. Si plus aucune case n'est
+            cochée, l'aperçu redevient vide (aucune colonne cochée = rien à montrer).
+
+        Entrée :
+            Aucune (lit `self.df`, `self.input_vars` et `self.output_vars`).
+
+        Sortie :
+            None. Reconstruit `self.tree` via `_populate_preview()`.
+        """
+        if getattr(self, "df", None) is None:
+            return
+        selected = set(self._checked(self.input_vars)) | set(self._checked(self.output_vars))
+        cols = [c for c in self.df.columns if c in selected]
+        self._populate_preview(self.df[cols])
 
     def _populate_preview(self, df):
         """Affiche les 10 premières lignes de `df` dans le tableau d'aperçu (`self.tree`).
