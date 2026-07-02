@@ -1169,7 +1169,7 @@ class RegressionApp(ctk.CTk):
             return
 
         try:
-            from optimize_xgboost import optimize_xgboost
+            from Modèles.optimize_xgboost import optimize_xgboost
         except ImportError:
             messagebox.showerror(
                 "Dépendance manquante",
