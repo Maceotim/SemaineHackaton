@@ -12,11 +12,14 @@ Après avoir centré et normalisé les donnés numériques, et transformé les d
 - Un modèle utilisant le **gradient boosting**
 
 # Structure des fichiers
-Il y a eu deux étapes à notre projet.  
+Tout d'abord, nous avons commencé par pre-process les données (join, normaliser (MinMax) (on a ensuite changé en StandardScaler)).
+
+Il y a eu deux étapes pour les modèles.  
 Tout d'abord, il a fallu fit des modèles sur trois simulations dont on nous a donnés les paramètres. Cela correspond aux fichiers :
 - ACP, qui présente l'ACP de la première simulation ainsi que la régression polynommiales sur les trois simulations
 - AL_model_1/2/3 qui présente les régressions linéaires des trois simulations
-- 
+
+Puis nous avons construit l'interface graphique et des fonctions qui fit les différents modèles (toujours les régressions, mais aussi random forest et XGboost) selon les paramètres d'entrée et de sortie données par l'utilisateur.
 
 # Difficultés et solutions
 
@@ -26,4 +29,4 @@ De plus, lors du pre-processing des données, il a été difficile de trouver le
 
 Lors du développement des différents modèles, on s'est également confrontés au problème des valeurs manquantes (plus de 80% de données manquantes pour certaines colonnes). Hors, pour les modèles, on ne peut utiliser les lignes qui ont une valeur manquante. Au départ, on a donc utilisé seulement les lignes où il n'y avait pas de données manquantes (en excluant P1_réel, car c'était la variable avec le plus de données manquantes et avec l'ACP, on a vu que la contribution de cette variable était minime). On a donc dû se contenter de quelques centaines de lignes au lieu de quelques milliers. Après discussion avec l'encadrante, nous avons pu reconstruire certaines valeurs manquantes, en utilisant l'indépendance des variables entre elles, ce qui a grandement augmenté les performances de nos différents modèles.
 
-Après avoir fix ce problème, on a eu des résultats très impressionnants (r2 supérieurs à 0.999)
+Après avoir fix ce problème, on a eu des résultats très impressionnants (r2 supérieurs à 0.999, rmse inférieur à 0.1). On s'est rendus compte que, en scindant les données en jeu de test et en jeu d'entraînement, on n'avait pas pris en compte que les essais apparaissaient plusieurs fois (à cause des différentes mesures dans la pratique) : ainsi, le même essai (avec des valeurs un peu différentes, certes, mais quand même fortement corrélées) se retrouve à la fois dans les données de test et dans les données d'entraînement. Une fois que cela a été changé en faisant un group by sur les essais, on a eu des résultats bien moins bons, mais beaucoup plus cohérents.
