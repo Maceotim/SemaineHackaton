@@ -18,6 +18,8 @@ from tkinter import ttk, filedialog, messagebox
 import customtkinter as ctk
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.linear_model import LinearRegression
 
 
 
@@ -50,9 +52,10 @@ def build_models():
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
 
+
     return {
         # Régression linéaire simple (moindres carrés ordinaires)
-        "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
+        "Régression linéaire": lambda: make_pipeline(StandardScaler(), MaRegressionLineaire()),
         # Ridge = régression linéaire régularisée (le nom affiché "Polynomiale" est trompeur :
         # aucune expansion polynomiale n'est faite ici, c'est bien une régression linéaire pénalisée)
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
@@ -77,6 +80,7 @@ class _XGBBoosterPredictor:
 
 
 class RegressionApp(ctk.CTk):
+        
     def __init__(self):
         super().__init__()
         ctk.set_appearance_mode("light")

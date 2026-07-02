@@ -1,0 +1,39 @@
+def random_forest_model(df_i,df_o):
+    #Importation of libraries
+    import pandas as pd
+    import numpy as np
+    from sklearn.model_selection import train_test_split, GridSearchCV
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.impute import SimpleImputer
+
+    #Data processing
+    X_train, X_test, y_train, y_test = train_test_split(df_i, df_o, test_size=0.2, random_state=42)
+
+    #Optimal hyperparameters for Random Forest
+    param_grid = {
+    'n_estimators': [100, 200, 600, 800],      # On cherche le bon nombre d'arbres
+    'max_depth': [5, 8, 12],             # On cherche la bonne profondeur
+    'min_samples_leaf': [2, 3, 5]        # On cherche à lisser plus ou moins les feuilles
+    }
+
+    # Modèle de base pour la recherche
+    rf_base = RandomForestRegressor(random_state=42)
+    # cv=5 : Validation croisée en 5 blocs. n_jobs=-1 : Utilise tout le CPU.
+    grid_moy = GridSearchCV(estimator=rf_base, param_grid=param_grid, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
+    grid_moy.fit(X_train, y_train)
+    rf_moy = grid_moy.best_estimator_
+    print("--- 4. Évaluation ---")
+    # Prédictions (avec les meilleurs modèles trouvés automatiquement)
+    pred_moy = rf_moy.predict(X_test)
+
+    # Métriques pour l'output
+    MAE  = mean_absolute_error(y_test, pred_moy)
+    RMSE = np.sqrt(mean_squared_error(y_test, pred_moy))
+    R2   = r2_score(y_test, pred_moy)
+    return (rf_moy,
+            f"MAE: {MAE:.2f}",
+            f"RMSE: {RMSE:.2f}",
+            f"R2: {R2:.2f}")
