@@ -66,25 +66,37 @@ def build_models():
         dict[str, Callable[[], sklearn.pipeline.Pipeline]] : associe le nom affiché du
         modèle (str, utilisé aussi comme clé dans MODEL_NAMES et MODEL_EXPLANATIONS) à
         une fonction sans argument qui, une fois appelée, renvoie une nouvelle instance
-        non entraînée de la pipeline scikit-learn correspondante :
-          - "Régression linéaire" : StandardScaler + LinearRegression (moindres carrés).
-          - "Régression Polynomiale" : StandardScaler + Ridge(alpha=1.0) — malgré son
-            nom, aucune expansion polynomiale n'est faite ; c'est une régression
-            linéaire régularisée.
-          - "Forêt aléatoire" : StandardScaler + RandomForestRegressor(n_estimators=300).
+        non entraînée de la pipeline scikit-learn correspondante.
     """
     from sklearn.linear_model import LinearRegression, Ridge
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
+    from sklearn.model_selection import GridSearchCV
+
+    def build_optimized_rf():
+        # Le Random Forest n'a mathématiquement pas besoin de StandardScaler.
+        # On instancie la base du modèle.
+        rf_base = RandomForestRegressor(random_state=0)
+        
+        # GRILLE ALLÉGÉE : L'appli évalue déjà le modèle avec une validation croisée externe.
+        # Si on met 36 combinaisons ici, l'interface va figer trop longtemps (nested CV).
+        # On réduit les choix pour rester réactif (2x2x3 = 12 combinaisons).
+        param_grid = {
+            'n_estimators': [100, 200,600],      
+            'max_depth': [8, 12, 16],             
+            'min_samples_leaf': [2, 3, 5]
+        }
+        
+        # On enveloppe le Random Forest dans un GridSearchCV avec cv=3 (plus rapide)
+        # n_jobs=-1 est vital pour que tous les cœurs du CPU travaillent en même temps
+        return GridSearchCV(estimator=rf_base, param_grid=param_grid, cv=3, n_jobs=-1)
 
     return {
         "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
-        "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
-        "Forêt aléatoire":     lambda: make_pipeline(StandardScaler(),
-                                   RandomForestRegressor(n_estimators=300, random_state=0)),
+        "Régression Polynomiale": lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
+        "Forêt aléatoire": build_optimized_rf,
     }
-
 
 MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléatoire", XGB_LABEL]
 
@@ -806,6 +818,7 @@ class RegressionApp(ctk.CTk):
                 self.input_frame, text=str(col), variable=v_in,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.input_vars.append((col, v_in))
 
@@ -814,8 +827,30 @@ class RegressionApp(ctk.CTk):
                 self.output_frame, text=str(col), variable=v_out,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.output_vars.append((col, v_out))
+
+    def _refresh_preview_selection(self):
+        """Callback des cases X/y : ne garde dans l'aperçu que les colonnes actuellement cochées.
+
+        Utilité :
+            Recalcule à chaque coche/décoche l'ensemble des colonnes sélectionnées
+            (entrées X ∪ sorties y) et redessine `self.tree` avec uniquement ces
+            colonnes, dans l'ordre du CSV d'origine. Si plus aucune case n'est
+            cochée, l'aperçu redevient vide (aucune colonne cochée = rien à montrer).
+
+        Entrée :
+            Aucune (lit `self.df`, `self.input_vars` et `self.output_vars`).
+
+        Sortie :
+            None. Reconstruit `self.tree` via `_populate_preview()`.
+        """
+        if getattr(self, "df", None) is None:
+            return
+        selected = set(self._checked(self.input_vars)) | set(self._checked(self.output_vars))
+        cols = [c for c in self.df.columns if c in selected]
+        self._populate_preview(self.df[cols])
 
     def _populate_preview(self, df):
         """Affiche les 10 premières lignes de `df` dans le tableau d'aperçu (`self.tree`).
