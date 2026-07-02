@@ -11,7 +11,12 @@ Après avoir centré et normalisé les donnés numériques, et transformé les d
 - Un **random forest**
 - Un modèle utilisant le **gradient boosting**
 
-
+# Structure des fichiers
+Il y a eu deux étapes à notre projet.  
+Tout d'abord, il a fallu fit des modèles sur trois simulations dont on nous a donnés les paramètres. Cela correspond aux fichiers :
+- ACP, qui présente l'ACP de la première simulation ainsi que la régression polynommiales sur les trois simulations
+- AL_model_1/2/3 qui présente les régressions linéaires des trois simulations
+- 
 
 # Difficultés et solutions
 
