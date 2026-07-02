@@ -1,19 +1,3 @@
-"""
-optimize_xgboost — Fonction unique d'optimisation XGBoost
-
-Encapsule les 6 phases de la stratégie :
-  Phase 0 : rythme d'apprentissage + baseline
-  Phase 1 : taille de chaque élève (max_depth, min_child_weight)
-  Phase 2 : seuil de motivation pour couper une branche (gamma)
-  Phase 3 : empêcher les élèves de tous penser pareil (subsample, colsample)
-  Phase 4 : pénaliser les corrections trop violentes (lambda, alpha)
-  Phase 5 : affinage fin automatique (Optuna) autour de la bonne zone
-  Phase 6 : examen final honnête + métriques (RMSE, R² en régression)
-
-ENTRÉE  : X (variables explicatives), y (cible)
-SORTIE  : dict contenant le modèle final, les paramètres, et test_metrics
-
-"""
 import pandas as pd
 import numpy as np
 import xgboost as xgb
