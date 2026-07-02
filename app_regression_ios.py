@@ -308,6 +308,14 @@ class RegressionApp(ctk.CTk):
         )
         self.export_button.pack(side="right")
 
+        # NOUVEAU : Bouton pour afficher les coefficients
+        self.coef_button = ctk.CTkButton(
+            bar, text="Voir les coefficients", command=self.show_coefficients,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
+        )
+        self.coef_button.pack(side="right", padx=(0, 10))
+
     # --------------------------------------------------------------- thèmes ---
     def _toggle_mode(self, value):
         ctk.set_appearance_mode("dark" if value == "Sombre" else "light")
@@ -379,6 +387,8 @@ class RegressionApp(ctk.CTk):
         self.trained_model = None
         self.trained_model_meta = None
         self.export_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self.coef_button.configure(state="disabled")
 
     def show_model_explanation(self):
         # Ouvre une pop-up d'explication pour le modèle actuellement sélectionné
@@ -530,6 +540,8 @@ class RegressionApp(ctk.CTk):
 
         self.result_label.configure(text="Calcul…", text_color=SUBTXT)
         self.export_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self.coef_button.configure(state="disabled")
         self.trained_model = None
         self.trained_model_meta = None
         self.update_idletasks()
@@ -605,6 +617,9 @@ class RegressionApp(ctk.CTk):
             "outputs": outputs,
         }
         self.export_button.configure(state="normal")
+        self.export_button.configure(state="normal")
+        if model_name in ["Régression linéaire", "Régression Polynomiale"]:
+            self.coef_button.configure(state="normal")
 
     def _train_xgboost(self, inputs, outputs, X, y, n, groups):
         if y.shape[1] > 1:
@@ -706,6 +721,79 @@ class RegressionApp(ctk.CTk):
             return
 
         messagebox.showinfo("Export réussi", f"Modèle enregistré :\n{path}")
+    
+    def show_coefficients(self):
+        if not self.trained_model:
+            return
+
+        model_name = self.trained_model_meta["model_name"]
+        
+        # Fenêtre pop-up
+        popup = ctk.CTkToplevel(self)
+        popup.title(f"Coefficients — {model_name}")
+        popup.geometry("480x500")
+        popup.configure(fg_color=BG)
+        popup.transient(self)
+        popup.grab_set()
+
+        ctk.CTkLabel(
+            popup, text="Coefficients du modèle",
+            font=ctk.CTkFont(size=20, weight="bold"), text_color=TXT
+        ).pack(pady=(20, 5))
+
+        # Précision importante car tu utilises un StandardScaler dans tes pipelines
+        ctk.CTkLabel(
+            popup, text="Note : Les valeurs s'appliquent aux variables d'entrée standardisées (centrées-réduites).",
+            text_color=SUBTXT, font=ctk.CTkFont(size=12), wraplength=420
+        ).pack(pady=(0, 10))
+
+        scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # Gestion multi-sorties (MultiOutputRegressor) ou sortie unique
+        from sklearn.multioutput import MultiOutputRegressor
+        if isinstance(self.trained_model, MultiOutputRegressor):
+            estimators = self.trained_model.estimators_
+        else:
+            estimators = [self.trained_model]
+
+        inputs = self.trained_model_meta["inputs"]
+        outputs = self.trained_model_meta["outputs"]
+
+        for i, est in enumerate(estimators):
+            out_name = outputs[i]
+            ctk.CTkLabel(
+                scroll, text=f"Cible : {out_name}",
+                font=ctk.CTkFont(size=15, weight="bold"), text_color=BLUE
+            ).pack(anchor="w", pady=(15, 5))
+
+            # Le modèle est un Pipeline scikit-learn (StandardScaler -> Regressor)
+            # On récupère la dernière étape du pipeline (le régresseur)
+            regressor = est[-1]
+            coefs = regressor.coef_.ravel()
+            
+            # Formatage de l'ordonnée à l'origine (Intercept)
+            intercept = regressor.intercept_
+            if isinstance(intercept, np.ndarray):
+                intercept = intercept[0]
+
+            ctk.CTkLabel(
+                scroll, text=f"Ordonnée à l'origine : {intercept:.4f}",
+                font=ctk.CTkFont(weight="bold"), text_color=TXT
+            ).pack(anchor="w", padx=10, pady=(0, 5))
+
+            # Affichage des coefficients pour chaque colonne d'entrée
+            for col_name, coef in zip(inputs, coefs):
+                ctk.CTkLabel(
+                    scroll, text=f"• {col_name} : {coef:.4f}",
+                    text_color=TXT
+                ).pack(anchor="w", padx=10)
+
+        ctk.CTkButton(
+            popup, text="Fermer", command=popup.destroy,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=20)
 
 
 if __name__ == "__main__":
