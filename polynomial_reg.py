@@ -16,14 +16,14 @@ def polyreg(X, Y) :
     #on met les variables sous forme polynomiale
     X_train, X_test, Y_train, Y_test = model_selection.train_test_split(X, Y, test_size=0.2, random_state=42)
 
-    pipeline = Pipeline([('poly_features', preprocessing.PolynomialFeatures(include_bias=False)), ('ridge', linear_model.Ridge)])
+    pipeline = Pipeline([('poly_features', preprocessing.PolynomialFeatures(include_bias=False)), ('ridge', linear_model.Ridge())])
 
     param_grid = {
-        'poly_features_degree': [1,2,3,4,5],
-        'ridge_alpha' : [0.001, 0.01, 0.1, 1.0]
+        'poly_features__degree': [1,2,3,4,5],
+        'ridge__alpha' : [0.001, 0.01, 0.1, 1.0]
     }
 
-    grid_search = model_selection.GridsearchCV(
+    grid_search = model_selection.GridSearchCV(
         estimator = pipeline,
         param_grid = param_grid,
         cv = 5,
