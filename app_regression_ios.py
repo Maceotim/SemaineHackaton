@@ -23,8 +23,8 @@ from sklearn.linear_model import LinearRegression
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.pipeline import Pipeline
 
 
 # --- Palette iOS (clair, sombre) -------------------------------------------
@@ -91,10 +91,28 @@ def build_models():
         # On enveloppe le Random Forest dans un GridSearchCV avec cv=3 (plus rapide)
         # n_jobs=-1 est vital pour que tous les cœurs du CPU travaillent en même temps
         return GridSearchCV(estimator=rf_base, param_grid=param_grid, cv=3, n_jobs=-1)
+    
+    def build_optimized_poly():
+
+        pipeline = Pipeline([("scaler", StandardScaler()), ('poly_features', PolynomialFeatures(include_bias=False)), ('ridge', Ridge())])
+
+        param_grid = {
+            'poly_features__degree': [1,2,3,4,5],
+            'ridge__alpha' : [0.001, 0.01, 0.1, 1.0]
+        }
+
+        grid_search = GridSearchCV(
+        estimator = pipeline,
+        param_grid = param_grid,
+        cv = 5,
+        scoring = 'neg_mean_squared_error',
+        n_jobs = -1
+        )
+        return grid_search
 
     return {
         "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
-        "Régression Polynomiale": lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
+        "Régression Polynomiale": build_optimized_poly,
         "Forêt aléatoire": build_optimized_rf,
     }
 
