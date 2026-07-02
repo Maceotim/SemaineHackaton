@@ -141,6 +141,57 @@ MODEL_EXPLANATIONS = {
 }
 
 
+# Explication vulgarisée de la case "Regrouper par essai", affichée dans la
+# pop-up "Explication du modèle" quelle que soit le modèle sélectionné (ce
+# réglage s'applique aux 4 modèles, pas à un modèle en particulier).
+GROUP_EXPLANATION = {
+    "fonctionnement": (
+        "Plusieurs lignes du fichier peuvent provenir du même « essai » "
+        "(la même expérience). Cochée, cette case interdit qu'un essai soit "
+        "à la fois utilisé pour entraîner le modèle et pour l'évaluer : "
+        "l'évaluation se fait sur un ou plusieurs essais que le modèle n'a "
+        "JAMAIS vus pendant l'entraînement — comme s'il devait prédire un "
+        "essai réalisé demain."
+    ),
+    "quand": (
+        "Laisse-la cochée si tu veux savoir si le modèle sait généraliser à "
+        "une nouvelle expérience : c'est la mesure la plus honnête. Ne la "
+        "décoche que pour un test rapide, ou si ton usage réel consiste à "
+        "compléter un essai déjà partiellement observé (dans ce cas précis, "
+        "le modèle a le droit d'avoir déjà vu d'autres lignes du même essai)."
+    ),
+    "limites": (
+        "Décochée : les lignes d'un même essai se ressemblant beaucoup entre "
+        "elles, le modèle peut se retrouver à réviser avec les réponses de "
+        "l'examen. Le score affiché est alors optimiste et ne dit rien de sa "
+        "capacité à généraliser à une expérience réellement nouvelle.\n\n"
+        "Cochée : si le fichier ne contient que peu d'essais distincts (par "
+        "exemple 6), l'essai (ou les 2-3 essais) gardé de côté pour "
+        "l'évaluation peut, par hasard, être assez différent des autres. Un "
+        "score très mauvais (R² très négatif) ne signifie alors pas "
+        "forcément que le modèle est inutilisable, mais qu'il n'a pas encore "
+        "assez d'essais variés pour apprendre à généraliser correctement. "
+        "Plus il y a d'essais distincts dans le fichier, plus cette mesure "
+        "devient fiable."
+    ),
+}
+
+
+def _grouped_eval_settings(n_groups_distinct):
+    """Réglages d'évaluation adaptés au nombre d'essais distincts.
+
+    Avec peu d'essais distincts, isoler un seul essai à la fois en test (ou
+    en pli de validation croisée) rend le score très dépendant du cas
+    particulier de cet essai. On vise alors à garder une part plus grande des
+    essais en test/pli (moins de plis pour la CV groupée, part de test plus
+    grande pour un split unique), au prix de moins de données d'entraînement.
+    Utilisé par les 4 modèles (les 3 pipelines scikit-learn ET XGBoost).
+    """
+    if n_groups_distinct <= 10:
+        return {"test_size": 0.4, "max_folds": 3}
+    return {"test_size": 0.2, "max_folds": 5}
+
+
 class _XGBBoosterPredictor:
     """Enveloppe un Booster XGBoost pour exposer un .predict(X) identique aux estimateurs scikit-learn."""
 
@@ -176,6 +227,7 @@ class RegressionApp(ctk.CTk):
         self.trained_model = None       # dernier modèle entraîné sur l'ensemble des données (exportable)
         self.trained_model_meta = None  # infos associées (colonnes X/y, nom du modèle)
         self.groups_col = None  # nom de la colonne de regroupement ('essai') détectée automatiquement
+        self.group_by_essai_var = ctk.BooleanVar(value=True)  # case à cocher : respecter ou non les essais lors du split
 
         self._build_header()
         self._build_file_card()
@@ -290,6 +342,17 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=14),
         ).pack(side="left", padx=12)
 
+        # Case à cocher : respecter ou non le regroupement par essai lors du split
+        # train/test et de la validation croisée. Décochée, chaque ligne est traitée
+        # indépendamment (plus de données de test, mais risque de fuite si plusieurs
+        # lignes d'un même essai se retrouvent à la fois en train et en test).
+        self.group_checkbox = ctk.CTkCheckBox(
+            bar, text="Regrouper par essai", variable=self.group_by_essai_var,
+            fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
+            text_color=TXT, font=ctk.CTkFont(size=13), state="disabled",
+        )
+        self.group_checkbox.pack(side="left", padx=12)
+
         ctk.CTkButton(
             bar, text="Entraîner / Évaluer", command=self.train_model,
             corner_radius=12, height=40, fg_color=GREEN, hover_color=GREEN,
@@ -371,6 +434,14 @@ class RegressionApp(ctk.CTk):
             label += f"  ·  regroupement auto par « {self.groups_col} »"
         self.file_label.configure(text=label)
 
+        # La case n'a de sens que si une colonne de regroupement a été détectée.
+        if self.groups_col:
+            self.group_checkbox.configure(state="normal")
+            self.group_by_essai_var.set(True)
+        else:
+            self.group_checkbox.configure(state="disabled")
+            self.group_by_essai_var.set(False)
+
         checkbox_cols = [c for c in df.columns if c != self.groups_col]
         self._populate_checkboxes(checkbox_cols)
 
@@ -391,15 +462,20 @@ class RegressionApp(ctk.CTk):
 
         popup = ctk.CTkToplevel(self)
         popup.title(f"Explication — {model_name}")
-        popup.geometry("520x480")
+        popup.geometry("560x640")
         popup.configure(fg_color=BG)
         popup.transient(self)
         popup.grab_set()
 
         ctk.CTkLabel(
             popup, text=model_name, font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=TXT, wraplength=460, justify="left",
+            text_color=TXT, wraplength=500, justify="left",
         ).pack(anchor="w", padx=20, pady=(20, 12))
+
+        # Zone déroulante : le contenu (explication du modèle + explication de
+        # la case "Regrouper par essai") dépasse la hauteur fixe de la pop-up.
+        scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=(0, 8))
 
         explanation = MODEL_EXPLANATIONS.get(model_name)
         sections = (
@@ -411,16 +487,24 @@ class RegressionApp(ctk.CTk):
             if explanation
             else [("Explication", "Explication à venir.")]
         )
+        # La case "Regrouper par essai" s'applique aux 4 modèles (ce n'est pas
+        # un réglage propre à un modèle), donc son explication est toujours
+        # ajoutée, quel que soit le modèle sélectionné dans le menu déroulant.
+        sections += [
+            ("Case « Regrouper par essai »", GROUP_EXPLANATION["fonctionnement"]),
+            ("Quand la cocher / la décocher", GROUP_EXPLANATION["quand"]),
+            ("Limites de ce réglage", GROUP_EXPLANATION["limites"]),
+        ]
 
         for title, body in sections:
             ctk.CTkLabel(
-                popup, text=title, font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=BLUE, wraplength=460, justify="left",
-            ).pack(anchor="w", padx=20, pady=(4, 2))
+                scroll, text=title, font=ctk.CTkFont(size=14, weight="bold"),
+                text_color=BLUE, wraplength=500, justify="left",
+            ).pack(anchor="w", padx=16, pady=(4, 2))
             ctk.CTkLabel(
-                popup, text=body, text_color=SUBTXT,
-                font=ctk.CTkFont(size=13), wraplength=460, justify="left",
-            ).pack(anchor="w", padx=20, pady=(0, 10))
+                scroll, text=body, text_color=SUBTXT,
+                font=ctk.CTkFont(size=13), wraplength=500, justify="left",
+            ).pack(anchor="w", padx=16, pady=(0, 10))
 
         ctk.CTkButton(
             popup, text="Fermer", command=popup.destroy,
@@ -511,9 +595,12 @@ class RegressionApp(ctk.CTk):
 
         # Colonne de regroupement ('essai') alignée sur les lignes conservées :
         # on retire aussi les lignes où elle est manquante, sinon un groupe NaN
-        # se retrouverait mélangé entre train et test.
+        # se retrouverait mélangé entre train et test. Ignoré si la case
+        # "Regrouper par essai" est décochée : chaque ligne est alors traitée
+        # indépendamment (plus de données de test, mais un même essai peut se
+        # retrouver à la fois en train et en test).
         groups = None
-        if self.groups_col:
+        if self.groups_col and self.group_by_essai_var.get():
             groups_series = self.df.loc[data.index, self.groups_col]
             valid = groups_series.notna()
             data = data[valid]
@@ -568,10 +655,15 @@ class RegressionApp(ctk.CTk):
             # sert qu'à MESURER la qualité du modèle (chaque modèle entraîné
             # pendant la CV est jeté ensuite). Si une colonne de regroupement est
             # détectée ('essai'), les plis respectent les groupes (GroupKFold) pour
-            # qu'un même essai ne se retrouve jamais scindé entre deux plis.
+            # qu'un même essai ne se retrouve jamais scindé entre deux plis. Avec
+            # peu d'essais distincts, on réduit aussi le nombre de plis (voir
+            # _grouped_eval_settings) pour que chaque pli de test en couvre
+            # plusieurs plutôt qu'un seul, moins sensible au cas particulier
+            # d'un essai isolé.
             scoring = ["r2", "neg_root_mean_squared_error"]
             if groups is not None:
-                k = min(5, n, len(np.unique(groups)))
+                max_folds = _grouped_eval_settings(len(np.unique(groups)))["max_folds"]
+                k = min(max_folds, n, len(np.unique(groups)))
                 cv = GroupKFold(n_splits=k)
                 cv_results = cross_validate(estimator, X, y, cv=cv, groups=groups, scoring=scoring)
             else:
@@ -625,14 +717,25 @@ class RegressionApp(ctk.CTk):
             )
             return
 
-        # Peu de données (ou peu de groupes distincts) : on réduit le nombre de
-        # plis de validation croisée (par défaut 5 dans optimize_xgboost) pour
-        # éviter des plis trop petits. `groups` (colonne 'essai') est transmis
-        # tel quel à optimize_xgboost, qui l'utilise pour le split train/test
-        # (GroupShuffleSplit) et la CV (GroupKFold) : un même essai ne se
-        # retrouve jamais scindé entre train et test.
-        effective_n = len(np.unique(groups)) if groups is not None else n
-        nfold = min(5, max(2, effective_n // 3))
+        # `groups` (colonne 'essai'), si fourni, est transmis tel quel à
+        # optimize_xgboost qui l'utilise UNIQUEMENT pour le split train/test
+        # (GroupShuffleSplit) : un même essai ne se retrouve jamais scindé
+        # entre train et test, pour une mesure finale honnête. La validation
+        # croisée interne (réglage des hyperparamètres, Phases 1 à 5) ne
+        # respecte plus les groupes et exploite directement les lignes du
+        # train ; on réduit son nombre de plis seulement si peu de lignes sont
+        # disponibles, pour éviter des plis trop petits.
+        nfold = min(5, max(2, n // 10))
+
+        # Avec un split par essai, une fraction de test fixe se traduit par un
+        # nombre d'essais tenus à l'écart très grossier quand il y en a peu
+        # (ex. 6 essais x 0.2 -> 1 seul essai en test : le R² final dépend
+        # alors entièrement du cas particulier de cet essai). On élargit la
+        # part de test quand peu d'essais sont distincts (même règle que pour
+        # les 3 modèles scikit-learn, voir _grouped_eval_settings), pour que
+        # le test set en couvre au moins 2-3 — au prix de moins d'essais
+        # disponibles pour l'entraînement.
+        test_size = _grouped_eval_settings(len(np.unique(groups)))["test_size"] if groups is not None else 0.2
 
         self.result_label.configure(
             text="Optimisation XGBoost en cours (réglage Optuna, peut prendre un peu de temps)…",
@@ -647,6 +750,7 @@ class RegressionApp(ctk.CTk):
                 eval_metric="rmse",
                 n_trials=20,        # budget Optuna réduit pour rester réactif dans l'UI
                 nfold=nfold,
+                test_size=test_size,
                 verbose=False,
             )
         except Exception as exc:  # noqa: BLE001
