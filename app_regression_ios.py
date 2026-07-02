@@ -55,7 +55,7 @@ def build_models():
 
     return {
         # Régression linéaire simple (moindres carrés ordinaires)
-        "Régression linéaire": lambda: make_pipeline(StandardScaler(), MaRegressionLineaire()),
+        "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
         # Ridge = régression linéaire régularisée (le nom affiché "Polynomiale" est trompeur :
         # aucune expansion polynomiale n'est faite ici, c'est bien une régression linéaire pénalisée)
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
@@ -66,6 +66,79 @@ def build_models():
 
 
 MODEL_NAMES = ["Régression linéaire", "Régression Polynomiale", "Forêt aléatoire", XGB_LABEL]
+
+
+# Explications vulgarisées affichées dans la pop-up "Explication du modèle".
+MODEL_EXPLANATIONS = {
+    "Régression linéaire": {
+        "fonctionnement": (
+            "Trace la droite (ou le plan) qui passe \"au plus près\" de tous les "
+            "points, en minimisant l'écart moyen entre les valeurs prédites et "
+            "les valeurs réelles."
+        ),
+        "quand": (
+            "Quand la relation entre X et y est à peu près linéaire, pour un "
+            "premier modèle simple et rapide à interpréter. Fonctionne dès "
+            "~20-30 lignes de données."
+        ),
+        "limites": (
+            "Ne capture pas les relations non linéaires. Sensible aux valeurs "
+            "aberrantes et aux variables d'entrée trop corrélées entre elles."
+        ),
+    },
+    "Régression Polynomiale": {
+        "fonctionnement": (
+            "En réalité une régression linéaire \"régularisée\" (Ridge) : elle "
+            "trace elle aussi une droite, mais pénalise les coefficients trop "
+            "grands pour éviter que le modèle ne colle trop aux données "
+            "d'entraînement."
+        ),
+        "quand": (
+            "Quand on a plusieurs variables d'entrée potentiellement corrélées, "
+            "ou peu de données par rapport au nombre de colonnes X. Idéalement "
+            "dès ~30 lignes, et plus de lignes que de colonnes."
+        ),
+        "limites": (
+            "Reste un modèle linéaire : ne capture pas les relations non "
+            "linéaires. Moins directement interprétable qu'une régression "
+            "linéaire simple."
+        ),
+    },
+    "Forêt aléatoire": {
+        "fonctionnement": (
+            "Fait \"voter\" des centaines d'arbres de décision, chacun entraîné "
+            "sur un échantillon légèrement différent des données, puis moyenne "
+            "leurs prédictions."
+        ),
+        "quand": (
+            "Quand la relation entre X et y est complexe ou non linéaire, et "
+            "qu'on ne veut pas se soucier de normaliser les données. Prévoir "
+            "au moins ~100 lignes pour un résultat fiable."
+        ),
+        "limites": (
+            "Moins interprétable (boîte noire), plus lent qu'un modèle "
+            "linéaire, et extrapole mal en dehors de la plage de valeurs vues "
+            "à l'entraînement."
+        ),
+    },
+    XGB_LABEL: {
+        "fonctionnement": (
+            "Construit une succession d'arbres de décision où chaque nouvel "
+            "arbre corrige les erreurs des précédents (\"boosting\"), avec un "
+            "réglage automatique des réglages internes (Optuna)."
+        ),
+        "quand": (
+            "Quand on cherche la meilleure performance possible sur une "
+            "relation complexe, et qu'on dispose d'un jeu de données de taille "
+            "moyenne à grande (idéalement 200 lignes ou plus)."
+        ),
+        "limites": (
+            "Le plus lent à entraîner (optimisation des hyperparamètres). "
+            "Boîte noire, et risque de sur-apprentissage sur un petit jeu de "
+            "données."
+        ),
+    },
+}
 
 
 class _XGBBoosterPredictor:
@@ -159,6 +232,12 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
         )
         self.file_label.pack(side="left", padx=16)
+
+        ctk.CTkButton(
+            bar, text="Explication du modèle", command=self.show_model_explanation,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(side="right")
 
     def _build_preview_card(self):
         card = self._card(row=2, title="APERÇU — 10 PREMIÈRES LIGNES")
@@ -300,6 +379,53 @@ class RegressionApp(ctk.CTk):
         self.trained_model = None
         self.trained_model_meta = None
         self.export_button.configure(state="disabled")
+
+    def show_model_explanation(self):
+        # Ouvre une pop-up d'explication pour le modèle actuellement sélectionné
+        # dans le menu déroulant. Le contenu est un espace réservé, à compléter
+        # ultérieurement avec la véritable explication de chaque modèle.
+        model_name = self.model_var.get() if hasattr(self, "model_var") else ""
+        if not model_name:
+            messagebox.showwarning("Aucun modèle", "Sélectionne d'abord un modèle.")
+            return
+
+        popup = ctk.CTkToplevel(self)
+        popup.title(f"Explication — {model_name}")
+        popup.geometry("520x480")
+        popup.configure(fg_color=BG)
+        popup.transient(self)
+        popup.grab_set()
+
+        ctk.CTkLabel(
+            popup, text=model_name, font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=TXT, wraplength=460, justify="left",
+        ).pack(anchor="w", padx=20, pady=(20, 12))
+
+        explanation = MODEL_EXPLANATIONS.get(model_name)
+        sections = (
+            [
+                ("Fonctionnement du modèle", explanation["fonctionnement"]),
+                ("Quand l'utiliser", explanation["quand"]),
+                ("Limites du modèle", explanation["limites"]),
+            ]
+            if explanation
+            else [("Explication", "Explication à venir.")]
+        )
+
+        for title, body in sections:
+            ctk.CTkLabel(
+                popup, text=title, font=ctk.CTkFont(size=14, weight="bold"),
+                text_color=BLUE, wraplength=460, justify="left",
+            ).pack(anchor="w", padx=20, pady=(4, 2))
+            ctk.CTkLabel(
+                popup, text=body, text_color=SUBTXT,
+                font=ctk.CTkFont(size=13), wraplength=460, justify="left",
+            ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        ctk.CTkButton(
+            popup, text="Fermer", command=popup.destroy,
+            corner_radius=12, height=36, fg_color=BLUE, hover_color=BLUE_HOV,
+        ).pack(anchor="e", padx=20, pady=(0, 20))
 
     def _populate_checkboxes(self, columns):
         # Reconstruit la liste des colonnes disponibles (X et y) à partir des
