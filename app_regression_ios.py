@@ -55,7 +55,7 @@ def build_models():
 
     return {
         # Régression linéaire simple (moindres carrés ordinaires)
-        "Régression linéaire": lambda: make_pipeline(StandardScaler(), MaRegressionLineaire()),
+        "Régression linéaire": lambda: make_pipeline(StandardScaler(), LinearRegression()),
         # Ridge = régression linéaire régularisée (le nom affiché "Polynomiale" est trompeur :
         # aucune expansion polynomiale n'est faite ici, c'est bien une régression linéaire pénalisée)
         "Régression Polynomiale":          lambda: make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
