@@ -13,7 +13,6 @@ from sklearn.pipeline import Pipeline
 
 
 def polyreg(X, Y) :
-    #on met les variables sous forme polynomiale
     X_train, X_test, Y_train, Y_test = model_selection.train_test_split(X, Y, test_size=0.2, random_state=42)
 
     pipeline = Pipeline([('poly_features', preprocessing.PolynomialFeatures(include_bias=False)), ('ridge', linear_model.Ridge())])

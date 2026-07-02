@@ -20,6 +20,10 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.linear_model import LinearRegression
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 
 
@@ -73,7 +77,8 @@ def build_models():
     def build_optimized_rf():
         # Le Random Forest n'a mathématiquement pas besoin de StandardScaler.
         # On instancie la base du modèle.
-        rf_base = RandomForestRegressor(random_state=42)
+
+        rf_base = RandomForestRegressor(random_state=42, n_jobs=-1)
         
         # On réduit les choix pour rester réactif (2x2x3 = 12 combinaisons).
         param_grid = {
@@ -436,6 +441,14 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(side="right")
 
+        # NOUVEAU : Le bouton ACP déplacé ici
+        self.pca_button = ctk.CTkButton(
+            bar, text="Analyse ACP", command=self.show_pca,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
+        )
+        self.pca_button.pack(side="right", padx=(0, 10))
+
     def _build_preview_card(self):
         """Construit la carte contenant le tableau d'aperçu des 10 premières lignes du CSV.
 
@@ -564,6 +577,7 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
         )
         self.coef_button.pack(side="right", padx=(0, 10))
+
 
     # --------------------------------------------------------------- thèmes ---
     def _toggle_mode(self, value):
@@ -803,6 +817,7 @@ class RegressionApp(ctk.CTk):
                 self.input_frame, text=str(col), variable=v_in,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.input_vars.append((col, v_in))
 
@@ -811,8 +826,30 @@ class RegressionApp(ctk.CTk):
                 self.output_frame, text=str(col), variable=v_out,
                 fg_color=BLUE, hover_color=BLUE_HOV, corner_radius=6,
                 text_color=TXT, font=ctk.CTkFont(size=13),
+                command=self._refresh_preview_selection,
             ).pack(anchor="w", padx=14, pady=4)
             self.output_vars.append((col, v_out))
+
+    def _refresh_preview_selection(self):
+        """Callback des cases X/y : ne garde dans l'aperçu que les colonnes actuellement cochées.
+
+        Utilité :
+            Recalcule à chaque coche/décoche l'ensemble des colonnes sélectionnées
+            (entrées X ∪ sorties y) et redessine `self.tree` avec uniquement ces
+            colonnes, dans l'ordre du CSV d'origine. Si plus aucune case n'est
+            cochée, l'aperçu redevient vide (aucune colonne cochée = rien à montrer).
+
+        Entrée :
+            Aucune (lit `self.df`, `self.input_vars` et `self.output_vars`).
+
+        Sortie :
+            None. Reconstruit `self.tree` via `_populate_preview()`.
+        """
+        if getattr(self, "df", None) is None:
+            return
+        selected = set(self._checked(self.input_vars)) | set(self._checked(self.output_vars))
+        cols = [c for c in self.df.columns if c in selected]
+        self._populate_preview(self.df[cols])
 
     def _populate_preview(self, df):
         """Affiche les 10 premières lignes de `df` dans le tableau d'aperçu (`self.tree`).
@@ -944,6 +981,7 @@ class RegressionApp(ctk.CTk):
         self.export_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
         self.coef_button.configure(state="disabled")
+        self.pca_button.configure(state="disabled")
         self.trained_model = None
         self.trained_model_meta = None
         self.update_idletasks()
@@ -1059,6 +1097,7 @@ class RegressionApp(ctk.CTk):
         }
         self.export_button.configure(state="normal")
         self.export_button.configure(state="normal")
+        self.pca_button.configure(state="normal")
         if model_name in ["Régression linéaire", "Régression Polynomiale"]:
             self.coef_button.configure(state="normal")
 
@@ -1177,6 +1216,7 @@ class RegressionApp(ctk.CTk):
             "best_params": result["best_params"],
         }
         self.export_button.configure(state="normal")
+        self.pca_button.configure(state="normal")
 
     def export_model(self):
         """Sauvegarde sur disque le dernier modèle entraîné, avec ses métadonnées, au format joblib.
@@ -1303,6 +1343,84 @@ class RegressionApp(ctk.CTk):
             corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
             font=ctk.CTkFont(size=14, weight="bold")
         ).pack(pady=20)
+    
+    def show_pca(self):
+        if not self.trained_model_meta:
+            return
+
+        # On récupère les colonnes d'entrée utilisées par le modèle
+        inputs = self.trained_model_meta["inputs"]
+        
+        # On extrait les données correspondantes, on convertit en numérique et on retire les NaN
+        df_inputs = self.df[inputs].apply(pd.to_numeric, errors="coerce").dropna()
+
+        if df_inputs.shape[1] < 2:
+            messagebox.showwarning("ACP", "Il faut au moins 2 variables d'entrée pour afficher les graphiques de l'ACP.")
+            return
+
+        # Création de la fenêtre Pop-up
+        popup = ctk.CTkToplevel(self)
+        popup.title("Analyse en Composantes Principales (ACP)")
+        popup.geometry("1100x600")
+        popup.configure(fg_color=BG)
+        popup.transient(self)
+        popup.grab_set()
+
+        # --- CALCUL DE L'ACP ---
+        # Sécurité : on prend au maximum 9 composantes, ou le nombre de colonnes si inférieur
+        n_comp = min(9, df_inputs.shape[1])
+        
+        # On standardise les données pour que l'ACP soit pertinente
+        scaled_data = StandardScaler().fit_transform(df_inputs)
+        
+        pca = PCA(n_components=n_comp)
+        pca.fit(scaled_data)
+
+        # --- CRÉATION DES GRAPHIQUES MATPLOTLIB ---
+        # Au lieu de plt.subplots(), on utilise Figure() pour l'intégrer à Tkinter
+        fig = Figure(figsize=(12, 5), dpi=100)
+        # Fond transparent pour coller au style de l'app
+        fig.patch.set_facecolor(CARD[0] if ctk.get_appearance_mode() == "Light" else CARD[1])
+        text_color = TXT[0] if ctk.get_appearance_mode() == "Light" else TXT[1]
+
+        ax1 = fig.add_subplot(121)
+        ax2 = fig.add_subplot(122)
+
+        # Graphique 1 : Variance expliquée
+        ax1.plot(np.arange(1, n_comp + 1), pca.explained_variance_ratio_, marker='o', color="#007AFF")
+        ax1.set_xlabel("Nombre de composantes principales", color=text_color)
+        ax1.set_ylabel("Proportion de variance expliquée", color=text_color)
+        ax1.set_title("Variance expliquée par chaque composante", color=text_color)
+        ax1.tick_params(colors=text_color)
+
+        # Graphique 2 : Contribution des paramètres
+        pcs = pca.components_
+        ax2.scatter(pcs[0], pcs[1], color="#34C759")
+        
+        for (x_coordinate, y_coordinate, feature_name) in zip(pcs[0], pcs[1], inputs):
+            ax2.text(x_coordinate + 0.02, y_coordinate + 0.02, feature_name, color=text_color)                        
+            
+        ax2.set_xlabel("Contribution à la PC1", color=text_color)
+        ax2.set_ylabel("Contribution à la PC2", color=text_color)
+        ax2.set_title("Contribution des paramètres", color=text_color)
+        ax2.tick_params(colors=text_color)
+        
+        # Ajout d'une grille légère et ajustement
+        ax1.grid(True, alpha=0.3)
+        ax2.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        # --- INTÉGRATION DANS TKINTER ---
+        canvas = FigureCanvasTkAgg(fig, master=popup)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Bouton fermer
+        ctk.CTkButton(
+            popup, text="Fermer", command=popup.destroy,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=(0, 20))
 
 
 if __name__ == "__main__":
