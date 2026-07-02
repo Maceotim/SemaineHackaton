@@ -430,6 +430,14 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(side="right")
 
+        # NOUVEAU : Le bouton ACP déplacé ici
+        self.pca_button = ctk.CTkButton(
+            bar, text="Analyse ACP", command=self.show_pca,
+            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
+            font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
+        )
+        self.pca_button.pack(side="right", padx=(0, 10))
+
     def _build_preview_card(self):
         """Construit la carte contenant le tableau d'aperçu des 10 premières lignes du CSV.
 
@@ -559,13 +567,6 @@ class RegressionApp(ctk.CTk):
         )
         self.coef_button.pack(side="right", padx=(0, 10))
 
-        # NOUVEAU : Bouton pour l'ACP
-        self.pca_button = ctk.CTkButton(
-            bar, text="Analyse ACP", command=self.show_pca,
-            corner_radius=12, height=40, fg_color=BLUE, hover_color=BLUE_HOV,
-            font=ctk.CTkFont(size=14, weight="bold"), state="disabled",
-        )
-        self.pca_button.pack(side="right", padx=(0, 10))
 
     # --------------------------------------------------------------- thèmes ---
     def _toggle_mode(self, value):
