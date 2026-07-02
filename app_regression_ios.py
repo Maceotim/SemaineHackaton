@@ -77,13 +77,12 @@ def build_models():
     def build_optimized_rf():
         # Le Random Forest n'a mathématiquement pas besoin de StandardScaler.
         # On instancie la base du modèle.
+
         rf_base = RandomForestRegressor(random_state=42, n_jobs=-1)
         
-        # GRILLE ALLÉGÉE : L'appli évalue déjà le modèle avec une validation croisée externe.
-        # Si on met 36 combinaisons ici, l'interface va figer trop longtemps (nested CV).
         # On réduit les choix pour rester réactif (2x2x3 = 12 combinaisons).
         param_grid = {
-            'n_estimators': [ 200,600,800],      
+            'n_estimators': [200,600, 800],      
             'max_depth': [8, 12, 16],             
             'min_samples_leaf': [2, 3, 5]
         }
@@ -1309,12 +1308,6 @@ class RegressionApp(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold"), text_color=TXT
         ).pack(pady=(20, 5))
 
-        # Précision importante car tu utilises un StandardScaler dans tes pipelines
-        ctk.CTkLabel(
-            popup, text="Note : Les valeurs s'appliquent aux variables d'entrée standardisées (centrées-réduites).",
-            text_color=SUBTXT, font=ctk.CTkFont(size=12), wraplength=420
-        ).pack(pady=(0, 10))
-
         scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -1335,9 +1328,45 @@ class RegressionApp(ctk.CTk):
                 font=ctk.CTkFont(size=15, weight="bold"), text_color=BLUE
             ).pack(anchor="w", pady=(15, 5))
 
-            # Le modèle est un Pipeline scikit-learn (StandardScaler -> Regressor)
-            # On récupère la dernière étape du pipeline (le régresseur)
-            regressor = est[-1]
+            # --- GESTION DU GridSearchCV ---
+            # Si le modèle a été optimisé (comme ta nouvelle régression polynomiale), 
+            # il faut extraire le meilleur pipeline trouvé.
+            if hasattr(est, "best_estimator_"):
+                fitted_model = est.best_estimator_
+            else:
+                fitted_model = est  # Cas de la régression linéaire simple
+
+            # --- DÉTECTION DU DEGRÉ ET NOMS DES VARIABLES ---
+            feature_names = inputs
+            has_poly = False
+            degree = 1
+            
+            # On parcourt les étapes du pipeline pour trouver un éventuel PolynomialFeatures
+            for step_name, step_obj in fitted_model.steps:
+                if type(step_obj).__name__ == "PolynomialFeatures":
+                    has_poly = True
+                    degree = step_obj.degree
+                    # Génère automatiquement les noms des combinaisons (ex: X0^2, X0 X1)
+                    feature_names = step_obj.get_feature_names_out(inputs)
+
+            if has_poly:
+                ctk.CTkLabel(
+                    scroll, text=f"Polynôme de degré optimal : {degree}",
+                    font=ctk.CTkFont(size=14, weight="bold"), text_color=GREEN
+                ).pack(anchor="w", pady=(0, 5))
+                ctk.CTkLabel(
+                    scroll, text="Note : Les valeurs s'appliquent aux variables standardisées puis combinées (ex: X², X·Y).",
+                    text_color=SUBTXT, font=ctk.CTkFont(size=12), wraplength=420
+                ).pack(anchor="w", pady=(0, 10))
+            else:
+                ctk.CTkLabel(
+                    scroll, text="Note : Les valeurs s'appliquent aux variables d'entrée standardisées (centrées-réduites).",
+                    text_color=SUBTXT, font=ctk.CTkFont(size=12), wraplength=420
+                ).pack(anchor="w", pady=(0, 10))
+
+            # --- RÉCUPÉRATION DES COEFFICIENTS ---
+            # Le régresseur (LinearRegression ou Ridge) est toujours la dernière étape [-1]
+            regressor = fitted_model[-1]
             coefs = regressor.coef_.ravel()
             
             # Formatage de l'ordonnée à l'origine (Intercept)
@@ -1350,8 +1379,8 @@ class RegressionApp(ctk.CTk):
                 font=ctk.CTkFont(weight="bold"), text_color=TXT
             ).pack(anchor="w", padx=10, pady=(0, 5))
 
-            # Affichage des coefficients pour chaque colonne d'entrée
-            for col_name, coef in zip(inputs, coefs):
+            # Affichage des coefficients détaillés
+            for col_name, coef in zip(feature_names, coefs):
                 ctk.CTkLabel(
                     scroll, text=f"• {col_name} : {coef:.4f}",
                     text_color=TXT
